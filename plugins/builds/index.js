@@ -813,7 +813,7 @@ async function createOrRunNextBuild({
         buildFactory,
         eventFactory,
         pipelineId,
-        jobName,
+        jobName: !isExternal || externalPipelineId === pipelineId ? externalJobName : jobName,
         start,
         username,
         scmContext,
@@ -838,7 +838,7 @@ async function createOrRunNextBuild({
     let nextBuild;
 
     // If next build is external, return the latest build with same job ID
-    if (isExternal) {
+    if (isExternal && externalPipelineId !== pipelineId) {
         const p = await pipelineFactory.get(externalPipelineId);
         const jobArray = await p.getJobs({ params: { name: externalJobName } });
         const j = await jobFactory.get(jobArray[0].id);
@@ -910,7 +910,7 @@ async function createOrRunNextBuild({
 
     // Create next build
     if (!nextBuild) {
-        if (isExternal) {
+        if (isExternal && externalPipelineId !== pipelineId) {
             externalBuildConfig.start = false;
             newBuild = await createExternalBuild(externalBuildConfig);
         } else {
@@ -1250,13 +1250,13 @@ const buildsPlugin = {
                  */
                 if (joinListNames.length === 0 || currentJobNotInJoinList) {
                     // Next build is internal
-                    if (!isExternal) {
+                    if (!isExternal || externalPipelineId === pipelineId) {
                         const internalBuildConfig = {
                             jobFactory,
                             buildFactory,
                             eventFactory,
                             pipelineId,
-                            jobName: nextJobName,
+                            jobName: isExternal ? externalJobName : nextJobName,
                             username,
                             scmContext,
                             build, // this is the parentBuild for the next build
