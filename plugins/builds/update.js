@@ -60,7 +60,7 @@ module.exports = () => ({
             const { statusMessage, stats, status: desiredStatus } = request.payload;
             const { username, scmContext, scope } = request.auth.credentials;
             const isBuild = scope.includes('build') || scope.includes('temporal');
-            const { triggerNextJobs } = request.server.plugins.builds;
+            const { triggerNextJobs, getChildBuilds } = request.server.plugins.builds;
 
             if (isBuild && username !== id) {
                 return boom.forbidden(`Credential only valid for ${username}`);
@@ -68,7 +68,7 @@ module.exports = () => ({
 
             return buildFactory
                 .get(id)
-                .then(build => {
+                .then((build) => {
                     if (!build) {
                         throw boom.notFound(`Build ${id} does not exist`);
                     }
@@ -102,11 +102,11 @@ module.exports = () => ({
                             Promise.all([jobFactory.get(build.jobId), userFactory.get({ username, scmContext })])
                                 // scmUri is buried in the pipeline, so we get that from the job
                                 .then(([job, user]) =>
-                                    job.pipeline.then(pipeline =>
+                                    job.pipeline.then((pipeline) =>
                                         user
                                             .getPermissions(pipeline.scmUri)
                                             // Check if user has push access or is a Screwdriver admin
-                                            .then(permissions => {
+                                            .then((permissions) => {
                                                 if (!permissions.push && !adminDetails.isAdmin) {
                                                     throw boom.forbidden(
                                                         `User ${user.getFullDisplayName()} does not ` +
@@ -116,14 +116,14 @@ module.exports = () => ({
 
                                                 return eventFactory
                                                     .get(build.eventId)
-                                                    .then(event => ({ build, event }));
+                                                    .then((event) => ({ build, event }));
                                             })
                                     )
                                 )
                         );
                     }
 
-                    return eventFactory.get(build.eventId).then(event => ({ build, event }));
+                    return eventFactory.get(build.eventId).then((event) => ({ build, event }));
                 })
                 .then(({ build, event }) => {
                     // We can't merge from executor-k8s/k8s-vm side because executor doesn't have build object
@@ -191,7 +191,7 @@ module.exports = () => ({
                     if (['RUNNING', 'COLLAPSED', 'FROZEN'].includes(desiredStatus)) {
                         return stepFactory
                             .get({ buildId: id, name: 'sd-setup-init' })
-                            .then(step => {
+                            .then((step) => {
                                 // If there is no init step, do nothing
                                 if (!step) {
                                     return null;
@@ -209,9 +209,9 @@ module.exports = () => ({
                     return Promise.all([build.update(), event.update(), isFixedBuild(build, jobFactory)]);
                 })
                 .then(([newBuild, newEvent, isFixed]) =>
-                    newBuild.job.then(job =>
+                    newBuild.job.then((job) =>
                         job.pipeline
-                            .then(async pipeline => {
+                            .then(async (pipeline) => {
                                 await request.server.events.emit('build_status', {
                                     settings: job.permutations[0].settings,
                                     status: newBuild.status,
@@ -229,8 +229,51 @@ module.exports = () => ({
                                 // Don't further trigger pipeline if intented to skip further jobs
 
                                 if (newBuild.status !== 'SUCCESS' || skipFurther) {
+                                    if (newBuild.status === 'FAILURE') {
+                                        getChildBuilds(
+                                            {
+                                                pipeline,
+                                                job,
+                                                build: newBuild,
+                                                username,
+                                                scmContext
+                                            },
+                                            request.server.app
+                                        ).then((builds) => {
+                                            builds.forEach(async (build) => {
+                                                await build.remove();
+                                            });
+                                        });
+                                    }
+
                                     return h.response(await newBuild.toJsonWithSteps()).code(200);
                                 }
+                                // if (newBuild.status === 'FAILURE') {
+                                //     return getChildbuilds(
+                                //         {
+                                //             pipeline,
+                                //             job,
+                                //             build: newBuild,
+                                //             username,
+                                //             scmContext
+                                //         },
+                                //         request.server.app
+                                //     ).then((builds) => {
+                                //         return buildFactory.get({
+                                //             eventId: newEvent.id,
+                                //             jobs: builds.id.jobs
+                                //     }).then(async (builds) =>  {
+                                //             builds.forEach(b => {
+                                //                 if (['CREATED', 'RUNNING', 'QUEUED', 'BLOCKED', 'FROZEN'].includes(b.status)) {
+                                //                     if (b.status === 'RUNNING') {
+                                //                         b.endTime = new Date().toISOString();
+                                //                     }
+                                //                     b.status = 'FAILED';
+                                //                 }
+                                //             })
+                                //             return h.response(await newBuild.toJsonWithSteps()).code(200);
+                                //         });
+                                // }}}
 
                                 return triggerNextJobs(
                                     {
@@ -245,7 +288,7 @@ module.exports = () => ({
                                     return h.response(await newBuild.toJsonWithSteps()).code(200);
                                 });
                             })
-                            .catch(err => {
+                            .catch((err) => {
                                 throw err;
                             })
                     )
