@@ -263,7 +263,9 @@ module.exports = () => ({
                                                 build: newBuild
                                             },
                                             request.server.app
-                                        );
+                                        ).then(async () => {
+                                            return h.response(await newBuild.toJsonWithSteps()).code(200);
+                                        });
                                     }
 
                                     return h.response(await newBuild.toJsonWithSteps()).code(200);
